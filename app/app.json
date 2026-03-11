@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Rowing Logbook",
+    "slug": "rowing-logbook",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
