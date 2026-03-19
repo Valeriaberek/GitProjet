@@ -1,0 +1,16 @@
+{
+  "name": "rowing-logbook",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev:backend": "pnpm --filter @rl/backend dev",
+    "dev:web": "pnpm --filter @rl/web dev",
+    "dev:app": "pnpm --filter @rl/app start",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "npm-check-updates": "^19.6.3"
+  }
+}
