@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  OnModuleInit,
   UnauthorizedException
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
@@ -37,14 +38,29 @@ interface SessionResult {
 
 const scryptAsync = promisify(nodeScrypt);
 
+const DEV_ROLE_USERS: Array<{
+  email: string;
+  name: string;
+  role: "ROWER" | "STAFF" | "ADMIN";
+}> = [
+  { email: "admin@rowing.local", name: "Admin RL", role: "ADMIN" },
+  { email: "staff@rowing.local", name: "Staff RL", role: "STAFF" },
+  { email: "rower@rowing.local", name: "Rower RL", role: "ROWER" }
+];
+
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   private static readonly REFRESH_DURATION_DAYS = 30;
+  private static readonly DEV_PASSWORD = "Rowing123!";
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly dbService: DbService
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureDevRoleUsers();
+  }
 
   async register(payload: RegisterDto): Promise<AuthResponse> {
     const email = this.normalizeEmail(payload.email);
@@ -352,5 +368,33 @@ export class AuthService {
     }
 
     return token.trim();
+  }
+
+  private async ensureDevRoleUsers(): Promise<void> {
+    const passwordHash = await this.hashSecret(AuthService.DEV_PASSWORD);
+
+    for (const devUser of DEV_ROLE_USERS) {
+      const existing = await this.findUserByEmail(devUser.email);
+
+      if (!existing) {
+        await this.dbService.query(
+          `
+          INSERT INTO users (id, email, name, role, is_active, password_hash)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          `,
+          [randomUUID(), devUser.email, devUser.name, devUser.role, true, passwordHash]
+        );
+        continue;
+      }
+
+      await this.dbService.query(
+        `
+        UPDATE users
+        SET role = $1, is_active = TRUE, name = $2
+        WHERE email = $3
+        `,
+        [devUser.role, devUser.name, devUser.email]
+      );
+    }
   }
 }

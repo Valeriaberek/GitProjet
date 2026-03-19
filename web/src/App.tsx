@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 
 type AuthMode = "login" | "register";
+type AdminView = "dashboard" | "outings" | "members" | "boats" | "stats";
 
 interface User {
   id: string;
@@ -15,12 +16,62 @@ interface AuthResponse {
   user: User;
 }
 
+interface CurrentOuting {
+  id: string;
+  boat: string;
+  skipper: string;
+  crewCount: number;
+  startedAt: string;
+  plannedKm: number;
+  route: string;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 const TOKEN_STORAGE_KEY = "rl.auth.token";
 const REFRESH_TOKEN_STORAGE_KEY = "rl.auth.refresh-token";
+const DEV_DEFAULT_PASSWORD = "Rowing123!";
+
+const ADMIN_NAV_ITEMS: Array<{ id: AdminView; label: string }> = [
+  { id: "dashboard", label: "Dashboard" },
+  { id: "outings", label: "Sorties" },
+  { id: "members", label: "Membres" },
+  { id: "boats", label: "Bateaux" },
+  { id: "stats", label: "Statistiques" }
+];
+
+const MOCK_CURRENT_OUTINGS: CurrentOuting[] = [
+  {
+    id: "o-1",
+    boat: "Skiff S1-07",
+    skipper: "Camille Dupont",
+    crewCount: 1,
+    startedAt: "2026-03-19T07:25:00.000Z",
+    plannedKm: 16,
+    route: "Canal Nord"
+  },
+  {
+    id: "o-2",
+    boat: "Double D2-03",
+    skipper: "Julien Martin",
+    crewCount: 2,
+    startedAt: "2026-03-19T08:10:00.000Z",
+    plannedKm: 18,
+    route: "Boucle Ouest"
+  },
+  {
+    id: "o-3",
+    boat: "Quatre Q4-01",
+    skipper: "Eva Bernard",
+    crewCount: 4,
+    startedAt: "2026-03-19T09:05:00.000Z",
+    plannedKm: 20,
+    route: "Lac central"
+  }
+];
 
 function App() {
   const [mode, setMode] = useState<AuthMode>("login");
+  const [adminView, setAdminView] = useState<AdminView>("dashboard");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -34,31 +85,54 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingMe, setIsLoadingMe] = useState(false);
 
-  const isAuthenticated = useMemo(() => Boolean(token && user), [token, user]);
+  const isAuthenticated = Boolean(token && user);
+  const isAdminUser = user?.role === "STAFF" || user?.role === "ADMIN";
 
-  useEffect(() => {
-    if (!token && !refreshToken) {
-      setUser(null);
-      return;
-    }
+  const kpis = useMemo(
+    () => ({
+      currentOutings: MOCK_CURRENT_OUTINGS.length,
+      closedToday: 18,
+      availableBoats: 11,
+      totalBoats: 15
+    }),
+    []
+  );
 
-    void bootstrapSession();
-  }, [token, refreshToken]);
+  const enrichedOutings = useMemo(
+    () =>
+      MOCK_CURRENT_OUTINGS.map((outing) => {
+        const minutes = Math.max(1, Math.floor((Date.now() - new Date(outing.startedAt).getTime()) / 60000));
+        const isAlert = minutes >= 180;
+        const isWarning = minutes >= 150;
 
-  async function bootstrapSession(): Promise<void> {
-    if (token) {
-      const meOk = await fetchMe(token);
+        return {
+          ...outing,
+          minutes,
+          isAlert,
+          isWarning
+        };
+      }),
+    []
+  );
+
+  async function bootstrapSession(nextToken: string | null, nextRefreshToken: string | null): Promise<void> {
+    if (nextToken) {
+      const meOk = await fetchMe(nextToken);
       if (meOk) {
         return;
       }
     }
 
-    if (!refreshToken) {
+    if (!nextRefreshToken) {
       clearSession();
       return;
     }
 
-    await refreshSession(refreshToken);
+    await refreshSession(nextRefreshToken);
+  }
+
+  if ((token || refreshToken) && !user && !isLoadingMe) {
+    void bootstrapSession(token, refreshToken);
   }
 
   async function fetchMe(currentToken: string): Promise<boolean> {
@@ -120,14 +194,7 @@ function App() {
 
     try {
       const endpoint = mode === "login" ? "login" : "register";
-      const payload =
-        mode === "login"
-          ? { email, password }
-          : {
-              email,
-              password,
-              name
-            };
+      const payload = mode === "login" ? { email, password } : { email, password, name };
 
       const response = await fetch(`${API_BASE_URL}/auth/${endpoint}`, {
         method: "POST",
@@ -186,97 +253,241 @@ function App() {
     localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
   }
 
+  function fillDevCredentials(devEmail: string): void {
+    setMode("login");
+    setEmail(devEmail);
+    setPassword(DEV_DEFAULT_PASSWORD);
+    setError(null);
+    setInfo(`Identifiants pre-remplis pour ${devEmail}`);
+  }
+
   return (
     <main className="page">
-      <section className="card">
-        <header className="hero">
-          <p className="eyebrow">Rowing Logbook</p>
-          <h1>Authentification admin</h1>
-          <p className="subtitle">Connexion locale web + backend NestJS</p>
-        </header>
+      {isAuthenticated && user ? (
+        isAdminUser ? (
+          <section className="admin-shell">
+            <aside className="admin-sidebar">
+              <p className="brand">Rowing Logbook</p>
+              <h1 className="admin-title">Admin Console</h1>
+              <nav className="admin-nav" aria-label="Navigation admin">
+                {ADMIN_NAV_ITEMS.map((item) => (
+                  <button
+                    key={item.id}
+                    className={adminView === item.id ? "admin-nav-item admin-nav-item-active" : "admin-nav-item"}
+                    type="button"
+                    onClick={() => setAdminView(item.id)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+            </aside>
 
-        {isAuthenticated && user ? (
-          <section className="panel">
-            <h2>Session active</h2>
-            <p>
-              Bonjour <strong>{user.name}</strong>
-            </p>
-            <p>{user.email}</p>
-            <p>Role: {user.role}</p>
-            <button className="primary" type="button" onClick={() => void onLogout()}>
-              Se deconnecter
-            </button>
+            <section className="admin-main">
+              <header className="admin-header">
+                <div>
+                  <p className="admin-eyebrow">MVP Sprint 1</p>
+                  <h2>
+                    {adminView === "dashboard" ? "Dashboard" : "Module en construction"}
+                  </h2>
+                </div>
+                <div className="admin-user-box">
+                  <p>{user.name}</p>
+                  <p>
+                    {user.email} - {user.role}
+                  </p>
+                  <button className="secondary" type="button" onClick={() => void onLogout()}>
+                    Se deconnecter
+                  </button>
+                </div>
+              </header>
+
+              {adminView === "dashboard" ? (
+                <>
+                  <section className="kpi-grid" aria-label="Indicateurs du jour">
+                    <article className="kpi-card">
+                      <p>Sorties en cours</p>
+                      <h3>{kpis.currentOutings}</h3>
+                    </article>
+                    <article className="kpi-card">
+                      <p>Sorties cloturees</p>
+                      <h3>{kpis.closedToday}</h3>
+                    </article>
+                    <article className="kpi-card">
+                      <p>Bateaux disponibles</p>
+                      <h3>
+                        {kpis.availableBoats}/{kpis.totalBoats}
+                      </h3>
+                    </article>
+                  </section>
+
+                  <section className="table-wrap" aria-label="Sorties en cours">
+                    <div className="table-head">
+                      <h3>Sorties en cours</h3>
+                      <p>Duree coloree a partir de 2h30, alerte a 3h.</p>
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Bateau</th>
+                          <th>Responsable</th>
+                          <th>Equipage</th>
+                          <th>Parcours</th>
+                          <th>Distance prevue</th>
+                          <th>Duree</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {enrichedOutings.map((outing) => (
+                          <tr key={outing.id}>
+                            <td>{outing.boat}</td>
+                            <td>{outing.skipper}</td>
+                            <td>{outing.crewCount}</td>
+                            <td>{outing.route}</td>
+                            <td>{outing.plannedKm} km</td>
+                            <td>
+                              <span
+                                className={
+                                  outing.isAlert
+                                    ? "pill pill-danger"
+                                    : outing.isWarning
+                                      ? "pill pill-warning"
+                                      : "pill"
+                                }
+                              >
+                                {formatDuration(outing.minutes)}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </section>
+                </>
+              ) : (
+                <section className="coming-soon">
+                  <h3>{ADMIN_NAV_ITEMS.find((item) => item.id === adminView)?.label}</h3>
+                  <p>Cette section arrive au sprint suivant selon la specification.</p>
+                </section>
+              )}
+            </section>
           </section>
         ) : (
-          <>
-            <div className="switcher" role="tablist" aria-label="Mode authentification">
-              <button
-                className={mode === "login" ? "chip chip-active" : "chip"}
-                type="button"
-                onClick={() => setMode("login")}
-              >
-                Connexion
+          <section className="card">
+            <header className="hero">
+              <p className="eyebrow">Acces restreint</p>
+              <h1>Role insuffisant</h1>
+              <p className="subtitle">Le web admin est reserve aux roles STAFF et ADMIN.</p>
+            </header>
+            <section className="panel">
+              <p>
+                Compte connecte: <strong>{user.name}</strong>
+              </p>
+              <p>
+                {user.email} - {user.role}
+              </p>
+              <button className="primary" type="button" onClick={() => void onLogout()}>
+                Se deconnecter
               </button>
-              <button
-                className={mode === "register" ? "chip chip-active" : "chip"}
-                type="button"
-                onClick={() => setMode("register")}
-              >
-                Inscription
+            </section>
+          </section>
+        )
+      ) : (
+        <section className="card">
+          <header className="hero">
+            <p className="eyebrow">Rowing Logbook</p>
+            <h1>Authentification admin</h1>
+            <p className="subtitle">Connexion locale web + backend NestJS</p>
+          </header>
+
+          <div className="switcher" role="tablist" aria-label="Mode authentification">
+            <button
+              className={mode === "login" ? "chip chip-active" : "chip"}
+              type="button"
+              onClick={() => setMode("login")}
+            >
+              Connexion
+            </button>
+            <button
+              className={mode === "register" ? "chip chip-active" : "chip"}
+              type="button"
+              onClick={() => setMode("register")}
+            >
+              Inscription
+            </button>
+          </div>
+
+          <div className="dev-quick-login" aria-label="Connexions rapides de developpement">
+            <p>Connexions rapides (dev)</p>
+            <div className="dev-quick-login-actions">
+              <button type="button" className="chip" onClick={() => fillDevCredentials("admin@rowing.local")}>
+                ADMIN
+              </button>
+              <button type="button" className="chip" onClick={() => fillDevCredentials("staff@rowing.local")}>
+                STAFF
+              </button>
+              <button type="button" className="chip" onClick={() => fillDevCredentials("rower@rowing.local")}>
+                ROWER
               </button>
             </div>
+          </div>
 
-            <form className="form" onSubmit={onSubmit}>
-              {mode === "register" ? (
-                <label>
-                  Nom
-                  <input
-                    autoComplete="name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="Ex: Valerie"
-                  />
-                </label>
-              ) : null}
-
+          <form className="form" onSubmit={onSubmit}>
+            {mode === "register" ? (
               <label>
-                Email
+                Nom
                 <input
-                  autoComplete="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="nom@email.com"
+                  autoComplete="name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Ex: Valerie"
                 />
               </label>
+            ) : null}
 
-              <label>
-                Mot de passe
-                <input
-                  autoComplete={mode === "login" ? "current-password" : "new-password"}
-                  type="password"
-                  minLength={8}
-                  required
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="8 caracteres minimum"
-                />
-              </label>
+            <label>
+              Email
+              <input
+                autoComplete="email"
+                type="email"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="nom@email.com"
+              />
+            </label>
 
-              <button className="primary" type="submit" disabled={isSubmitting || isLoadingMe}>
-                {isSubmitting ? "En cours..." : mode === "login" ? "Se connecter" : "Creer un compte"}
-              </button>
-            </form>
-          </>
-        )}
+            <label>
+              Mot de passe
+              <input
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                type="password"
+                minLength={8}
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="8 caracteres minimum"
+              />
+            </label>
 
-        {isLoadingMe ? <p className="status">Verification de session...</p> : null}
-        {info ? <p className="status status-ok">{info}</p> : null}
-        {error ? <p className="status status-error">{error}</p> : null}
-      </section>
+            <button className="primary" type="submit" disabled={isSubmitting || isLoadingMe}>
+              {isSubmitting ? "En cours..." : mode === "login" ? "Se connecter" : "Creer un compte"}
+            </button>
+          </form>
+        </section>
+      )}
+
+      {isLoadingMe ? <p className="status">Verification de session...</p> : null}
+      {info ? <p className="status status-ok">{info}</p> : null}
+      {error ? <p className="status status-error">{error}</p> : null}
     </main>
   );
+}
+
+function formatDuration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h${remainingMinutes.toString().padStart(2, "0")}`;
 }
 
 export default App;
