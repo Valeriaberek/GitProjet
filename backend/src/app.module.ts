@@ -2,6 +2,7 @@
 
 import { JwtModule } from "@nestjs/jwt";
 
+import { AdminController, AdminService } from "./admin";
 import { AuthController, AuthService } from "./auth";
 import { DbService } from "./db/db.service";
 import { HealthController } from "./health/health.controller";
@@ -13,7 +14,7 @@ import { HealthController } from "./health/health.controller";
       signOptions: { expiresIn: "1d" }
     })
   ],
-  controllers: [HealthController, AuthController],
-  providers: [AuthService, DbService]
+  controllers: [HealthController, AuthController, AdminController],
+  providers: [AuthService, DbService, AdminService]
 })
 export class AppModule {}

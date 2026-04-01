@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  OnModuleInit,
   UnauthorizedException
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
@@ -38,13 +39,17 @@ interface SessionResult {
 const scryptAsync = promisify(nodeScrypt);
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   private static readonly REFRESH_DURATION_DAYS = 30;
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly dbService: DbService
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureDefaultUsers();
+  }
 
   async register(payload: RegisterDto): Promise<AuthResponse> {
     const email = this.normalizeEmail(payload.email);
@@ -352,5 +357,48 @@ export class AuthService {
     }
 
     return token.trim();
+  }
+
+  private async ensureDefaultUsers(): Promise<void> {
+    const seedToggle = process.env.AUTH_SEED_DEFAULT_USERS;
+    const shouldSeed = seedToggle
+      ? seedToggle.toLowerCase() === "true"
+      : process.env.NODE_ENV !== "production";
+
+    if (!shouldSeed) {
+      return;
+    }
+
+    const defaults: Array<{ email: string; name: string; role: "ROWER" | "STAFF" | "ADMIN" }> = [
+      { email: "admin@rowing.local", name: "Admin", role: "ADMIN" },
+      { email: "staff@rowing.local", name: "Staff", role: "STAFF" },
+      { email: "rower@rowing.local", name: "Rower", role: "ROWER" }
+    ];
+
+    const defaultPasswordHash = await this.hashSecret("Rowing123!");
+
+    for (const account of defaults) {
+      await this.dbService.query(
+        `
+        INSERT INTO users (id, email, name, role, is_active, password_hash)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (email)
+        DO UPDATE SET
+          name = EXCLUDED.name,
+          role = EXCLUDED.role,
+          is_active = TRUE,
+          password_hash = EXCLUDED.password_hash,
+          updated_at = NOW()
+        `,
+        [
+          randomUUID(),
+          this.normalizeEmail(account.email),
+          account.name,
+          account.role,
+          true,
+          defaultPasswordHash
+        ]
+      );
+    }
   }
 }

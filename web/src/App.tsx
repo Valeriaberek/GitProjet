@@ -1,12 +1,88 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type AuthMode = "login" | "register";
+type Tab = "dashboard" | "sessions" | "members" | "boats" | "stats";
+type SessionStatus = "IN_PROGRESS" | "COMPLETED";
 
 interface User {
   id: string;
   email: string;
   name: string;
   role: "ROWER" | "STAFF" | "ADMIN";
+}
+
+interface DashboardPayload {
+  generatedAt: string;
+  indicators: {
+    inProgressCount: number;
+    completedTodayCount: number;
+    availableBoats: number;
+    totalBoats: number;
+  };
+  activeSessions: Array<{
+    id: string;
+    boatName: string;
+    responsibleName: string;
+    crew: string[];
+    departureTime: string;
+    durationMinutes: number;
+    route: string | null;
+    plannedDistanceKm: number;
+    isOverThreeHours: boolean;
+  }>;
+}
+
+interface SessionItem {
+  id: string;
+  boatName: string;
+  responsibleName: string;
+  departureTime: string;
+  returnTime: string | null;
+  status: SessionStatus;
+  plannedDistanceKm: number;
+  actualDistanceKm: number | null;
+  route: string | null;
+}
+
+interface MemberItem {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: "ROWER" | "STAFF" | "ADMIN";
+  isActive: boolean;
+  createdAt: string;
+}
+
+interface BoatItem {
+  id: string;
+  name: string;
+  type: string;
+  capacity: number;
+  condition: string;
+  isOutOfService: boolean;
+}
+
+interface StatsOverview {
+  period: string;
+  sessionCount: number;
+  totalDistanceKm: number;
+  totalDurationHours: number;
+}
+
+interface RowerStat {
+  rowerId: string;
+  rowerName: string;
+  sessionCount: number;
+  totalDistanceKm: number;
+}
+
+interface BoatStat {
+  boatId: string;
+  boatName: string;
+  sessionCount: number;
+  totalDistanceKm: number;
+  usageRatePercent: number;
 }
 
 interface AuthResponse {
@@ -33,8 +109,38 @@ function App() {
   const [info, setInfo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingMe, setIsLoadingMe] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+
+  const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [sessionsTotal, setSessionsTotal] = useState(0);
+  const [members, setMembers] = useState<MemberItem[]>([]);
+  const [boats, setBoats] = useState<BoatItem[]>([]);
+  const [overview, setOverview] = useState<StatsOverview | null>(null);
+  const [rowerStats, setRowerStats] = useState<RowerStat[]>([]);
+  const [boatStats, setBoatStats] = useState<BoatStat[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  const [sessionStatusFilter, setSessionStatusFilter] = useState<string>("");
+  const [sessionBoatFilter, setSessionBoatFilter] = useState("");
+  const [sessionRowerFilter, setSessionRowerFilter] = useState("");
+  const [sessionDateFilter, setSessionDateFilter] = useState("");
+
+  const [newMemberFirstName, setNewMemberFirstName] = useState("");
+  const [newMemberLastName, setNewMemberLastName] = useState("");
+  const [newMemberEmail, setNewMemberEmail] = useState("");
+  const [newMemberRole, setNewMemberRole] = useState<"ROWER" | "STAFF" | "ADMIN">("ROWER");
+
+  const [newBoatName, setNewBoatName] = useState("");
+  const [newBoatType, setNewBoatType] = useState("");
+  const [newBoatCapacity, setNewBoatCapacity] = useState("1");
+  const [newBoatCondition, setNewBoatCondition] = useState("Bon etat");
+
+  const [statsPeriod, setStatsPeriod] = useState("month");
 
   const isAuthenticated = useMemo(() => Boolean(token && user), [token, user]);
+  const hasAdminAccess = useMemo(() => user?.role === "ADMIN" || user?.role === "STAFF", [user]);
+  const isAdmin = useMemo(() => user?.role === "ADMIN", [user]);
 
   useEffect(() => {
     if (!token && !refreshToken) {
@@ -44,6 +150,37 @@ function App() {
 
     void bootstrapSession();
   }, [token, refreshToken]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !hasAdminAccess) {
+      setDashboard(null);
+      setSessions([]);
+      setMembers([]);
+      setBoats([]);
+      setOverview(null);
+      setRowerStats([]);
+      setBoatStats([]);
+      return;
+    }
+
+    void loadDashboardData();
+  }, [isAuthenticated, hasAdminAccess]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !hasAdminAccess) {
+      return;
+    }
+
+    void loadSessions();
+  }, [sessionStatusFilter, sessionBoatFilter, sessionRowerFilter, sessionDateFilter, isAuthenticated, hasAdminAccess]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !hasAdminAccess) {
+      return;
+    }
+
+    void loadStats();
+  }, [statsPeriod, isAuthenticated, hasAdminAccess]);
 
   async function bootstrapSession(): Promise<void> {
     if (token) {
@@ -109,6 +246,227 @@ function App() {
     } catch (refreshError) {
       clearSession();
       setError(refreshError instanceof Error ? refreshError.message : "Impossible de restaurer la session");
+    }
+  }
+
+  async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+    if (!token) {
+      throw new Error("Session invalide");
+    }
+
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers || {}),
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json") ? await response.json() : await response.text();
+
+    if (!response.ok) {
+      const message =
+        typeof body === "object" && body && "message" in body
+          ? Array.isArray((body as { message?: string | string[] }).message)
+            ? (body as { message?: string[] }).message?.[0]
+            : (body as { message?: string }).message
+          : undefined;
+      throw new Error(message || "Erreur API");
+    }
+
+    return body as T;
+  }
+
+  async function loadDashboardData(): Promise<void> {
+    setIsLoadingData(true);
+    setError(null);
+
+    try {
+      const [dashboardData, sessionData] = await Promise.all([
+        apiFetch<DashboardPayload>("/admin/dashboard"),
+        apiFetch<{ items: SessionItem[]; total: number }>("/sessions/history?page=1&pageSize=20")
+      ]);
+      setDashboard(dashboardData);
+      setSessions(sessionData.items);
+      setSessionsTotal(sessionData.total);
+
+      if (isAdmin) {
+        const [membersData, boatsData] = await Promise.all([
+          apiFetch<MemberItem[]>("/members"),
+          apiFetch<BoatItem[]>("/boats")
+        ]);
+        setMembers(membersData);
+        setBoats(boatsData);
+      }
+
+      await loadStats();
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Impossible de charger le dashboard");
+    } finally {
+      setIsLoadingData(false);
+    }
+  }
+
+  async function loadSessions(): Promise<void> {
+    try {
+      const params = new URLSearchParams({ page: "1", pageSize: "20" });
+      if (sessionStatusFilter) {
+        params.set("status", sessionStatusFilter);
+      }
+      if (sessionBoatFilter.trim()) {
+        params.set("boat", sessionBoatFilter.trim());
+      }
+      if (sessionRowerFilter.trim()) {
+        params.set("rower", sessionRowerFilter.trim());
+      }
+      if (sessionDateFilter) {
+        params.set("date", sessionDateFilter);
+      }
+
+      const data = await apiFetch<{ items: SessionItem[]; total: number }>(`/sessions/history?${params.toString()}`);
+      setSessions(data.items);
+      setSessionsTotal(data.total);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Erreur chargement sorties");
+    }
+  }
+
+  async function loadStats(): Promise<void> {
+    try {
+      const [overviewData, rowersData, boatsData] = await Promise.all([
+        apiFetch<StatsOverview>(`/stats/overview?period=${statsPeriod}`),
+        apiFetch<RowerStat[]>("/stats/rowers"),
+        apiFetch<BoatStat[]>("/stats/boats")
+      ]);
+      setOverview(overviewData);
+      setRowerStats(rowersData);
+      setBoatStats(boatsData);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Erreur chargement statistiques");
+    }
+  }
+
+  async function closeSession(sessionId: string): Promise<void> {
+    try {
+      await apiFetch<{ success: boolean }>(`/sessions/${sessionId}/close`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setInfo("Sortie cloturee.");
+      await loadDashboardData();
+    } catch (closeError) {
+      setError(closeError instanceof Error ? closeError.message : "Erreur cloture sortie");
+    }
+  }
+
+  async function exportSessionsCsv(): Promise<void> {
+    if (!token) {
+      return;
+    }
+
+    const params = new URLSearchParams();
+    if (sessionStatusFilter) {
+      params.set("status", sessionStatusFilter);
+    }
+    if (sessionBoatFilter.trim()) {
+      params.set("boat", sessionBoatFilter.trim());
+    }
+    if (sessionRowerFilter.trim()) {
+      params.set("rower", sessionRowerFilter.trim());
+    }
+    if (sessionDateFilter) {
+      params.set("date", sessionDateFilter);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/sessions/export.csv?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+      setError("Export CSV impossible");
+      return;
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "sessions-export.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function createMember(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    try {
+      await apiFetch<MemberItem>("/members", {
+        method: "POST",
+        body: JSON.stringify({
+          firstName: newMemberFirstName,
+          lastName: newMemberLastName,
+          email: newMemberEmail,
+          role: newMemberRole
+        })
+      });
+      setNewMemberFirstName("");
+      setNewMemberLastName("");
+      setNewMemberEmail("");
+      setNewMemberRole("ROWER");
+      setInfo("Membre cree.");
+      setMembers(await apiFetch<MemberItem[]>("/members"));
+    } catch (memberError) {
+      setError(memberError instanceof Error ? memberError.message : "Erreur creation membre");
+    }
+  }
+
+  async function toggleMemberStatus(member: MemberItem): Promise<void> {
+    try {
+      await apiFetch<{ success: boolean }>(`/members/${member.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ isActive: !member.isActive })
+      });
+      setMembers(await apiFetch<MemberItem[]>("/members"));
+    } catch (memberError) {
+      setError(memberError instanceof Error ? memberError.message : "Erreur statut membre");
+    }
+  }
+
+  async function createBoat(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    try {
+      await apiFetch<BoatItem>("/boats", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newBoatName,
+          type: newBoatType,
+          capacity: Number(newBoatCapacity),
+          condition: newBoatCondition
+        })
+      });
+      setNewBoatName("");
+      setNewBoatType("");
+      setNewBoatCapacity("1");
+      setNewBoatCondition("Bon etat");
+      setInfo("Bateau cree.");
+      setBoats(await apiFetch<BoatItem[]>("/boats"));
+    } catch (boatError) {
+      setError(boatError instanceof Error ? boatError.message : "Erreur creation bateau");
+    }
+  }
+
+  async function toggleBoatOutOfService(boat: BoatItem): Promise<void> {
+    try {
+      await apiFetch<{ success: boolean }>(`/boats/${boat.id}/out-of-service`, {
+        method: "PATCH",
+        body: JSON.stringify({ isOutOfService: !boat.isOutOfService })
+      });
+      setBoats(await apiFetch<BoatItem[]>("/boats"));
+    } catch (boatError) {
+      setError(boatError instanceof Error ? boatError.message : "Erreur mise a jour bateau");
     }
   }
 
@@ -196,17 +554,323 @@ function App() {
         </header>
 
         {isAuthenticated && user ? (
-          <section className="panel">
-            <h2>Session active</h2>
-            <p>
-              Bonjour <strong>{user.name}</strong>
-            </p>
-            <p>{user.email}</p>
-            <p>Role: {user.role}</p>
-            <button className="primary" type="button" onClick={() => void onLogout()}>
-              Se deconnecter
-            </button>
-          </section>
+          hasAdminAccess ? (
+            <section className="panel dashboard-app" aria-label="Dashboard admin">
+              <div className="dashboard-header app-toolbar">
+                <div>
+                  <h2>Dashboard administration</h2>
+                  <p className="subtitle">
+                    Connecte: <strong>{user.name}</strong> ({user.role})
+                  </p>
+                </div>
+                <div className="toolbar-actions">
+                  <button className="chip" type="button" onClick={() => void loadDashboardData()}>
+                    Actualiser
+                  </button>
+                  <button className="primary" type="button" onClick={() => void onLogout()}>
+                    Se deconnecter
+                  </button>
+                </div>
+              </div>
+
+              <div className="tabs">
+                <button className={activeTab === "dashboard" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("dashboard")} type="button">Tableau de bord</button>
+                <button className={activeTab === "sessions" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("sessions")} type="button">Sorties</button>
+                {isAdmin ? <button className={activeTab === "members" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("members")} type="button">Membres</button> : null}
+                {isAdmin ? <button className={activeTab === "boats" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("boats")} type="button">Bateaux</button> : null}
+                <button className={activeTab === "stats" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("stats")} type="button">Statistiques</button>
+              </div>
+
+              {isLoadingData ? <p className="status">Chargement des donnees...</p> : null}
+
+              {activeTab === "dashboard" ? (
+                <>
+                  <div className="dashboard-grid">
+                    <article className="metric-card">
+                      <h3>Sorties en cours</h3>
+                      <p className="metric-value">{dashboard?.indicators.inProgressCount ?? 0}</p>
+                    </article>
+                    <article className="metric-card">
+                      <h3>Sorties cloturees aujourd'hui</h3>
+                      <p className="metric-value">{dashboard?.indicators.completedTodayCount ?? 0}</p>
+                    </article>
+                    <article className="metric-card metric-wide">
+                      <h3>Bateaux disponibles</h3>
+                      <p className="metric-value">
+                        {dashboard?.indicators.availableBoats ?? 0} / {dashboard?.indicators.totalBoats ?? 0}
+                      </p>
+                    </article>
+                  </div>
+
+                  <h3>Sorties en temps reel</h3>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Bateau</th>
+                          <th>Responsable</th>
+                          <th>Equipage</th>
+                          <th>Depart</th>
+                          <th>Duree</th>
+                          <th>Parcours</th>
+                          <th>Distance prevue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(dashboard?.activeSessions ?? []).map((session) => (
+                          <tr key={session.id} className={session.isOverThreeHours ? "row-alert" : ""}>
+                            <td>{session.boatName}</td>
+                            <td>{session.responsibleName}</td>
+                            <td>{session.crew.join(", ") || "-"}</td>
+                            <td>{new Date(session.departureTime).toLocaleString("fr-FR")}</td>
+                            <td>{session.durationMinutes} min</td>
+                            <td>{session.route || "-"}</td>
+                            <td>{session.plannedDistanceKm} km</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "sessions" ? (
+                <>
+                  <h3>Gestion des sorties</h3>
+                  <div className="filters-grid">
+                    <select value={sessionStatusFilter} onChange={(event) => setSessionStatusFilter(event.target.value)}>
+                      <option value="">Tous statuts</option>
+                      <option value="IN_PROGRESS">En cours</option>
+                      <option value="COMPLETED">Cloturees</option>
+                    </select>
+                    <input value={sessionBoatFilter} onChange={(event) => setSessionBoatFilter(event.target.value)} placeholder="Filtre bateau" />
+                    <input value={sessionRowerFilter} onChange={(event) => setSessionRowerFilter(event.target.value)} placeholder="Filtre rameur" />
+                    <input type="date" value={sessionDateFilter} onChange={(event) => setSessionDateFilter(event.target.value)} />
+                  </div>
+                  <p className="status">Total: {sessionsTotal}</p>
+                  <button className="chip" type="button" onClick={() => void exportSessionsCsv()}>
+                    Export CSV
+                  </button>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Bateau</th>
+                          <th>Responsable</th>
+                          <th>Depart</th>
+                          <th>Retour</th>
+                          <th>Statut</th>
+                          <th>Distance</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sessions.map((session) => (
+                          <tr key={session.id}>
+                            <td>{session.boatName}</td>
+                            <td>{session.responsibleName}</td>
+                            <td>{new Date(session.departureTime).toLocaleString("fr-FR")}</td>
+                            <td>{session.returnTime ? new Date(session.returnTime).toLocaleString("fr-FR") : "-"}</td>
+                            <td>{session.status}</td>
+                            <td>{session.actualDistanceKm ?? session.plannedDistanceKm} km</td>
+                            <td>
+                              {session.status === "IN_PROGRESS" ? (
+                                <button className="chip" type="button" onClick={() => void closeSession(session.id)}>
+                                  Cloturer
+                                </button>
+                              ) : (
+                                "-"
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "members" && isAdmin ? (
+                <>
+                  <h3>Gestion des membres</h3>
+                  <form className="form compact-form" onSubmit={createMember}>
+                    <input required value={newMemberFirstName} onChange={(event) => setNewMemberFirstName(event.target.value)} placeholder="Prenom" />
+                    <input required value={newMemberLastName} onChange={(event) => setNewMemberLastName(event.target.value)} placeholder="Nom" />
+                    <input required type="email" value={newMemberEmail} onChange={(event) => setNewMemberEmail(event.target.value)} placeholder="Email" />
+                    <select value={newMemberRole} onChange={(event) => setNewMemberRole(event.target.value as "ROWER" | "STAFF" | "ADMIN")}>
+                      <option value="ROWER">ROWER</option>
+                      <option value="STAFF">STAFF</option>
+                      <option value="ADMIN">ADMIN</option>
+                    </select>
+                    <button className="primary" type="submit">Creer</button>
+                  </form>
+
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Prenom</th>
+                          <th>Nom</th>
+                          <th>Email</th>
+                          <th>Role</th>
+                          <th>Statut</th>
+                          <th>Inscription</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {members.map((member) => (
+                          <tr key={member.id}>
+                            <td>{member.firstName}</td>
+                            <td>{member.lastName}</td>
+                            <td>{member.email}</td>
+                            <td>{member.role}</td>
+                            <td>{member.isActive ? "Actif" : "Inactif"}</td>
+                            <td>{new Date(member.createdAt).toLocaleDateString("fr-FR")}</td>
+                            <td>
+                              <button className="chip" type="button" onClick={() => void toggleMemberStatus(member)}>
+                                {member.isActive ? "Desactiver" : "Reactiver"}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "boats" && isAdmin ? (
+                <>
+                  <h3>Gestion des bateaux</h3>
+                  <form className="form compact-form" onSubmit={createBoat}>
+                    <input required value={newBoatName} onChange={(event) => setNewBoatName(event.target.value)} placeholder="Nom bateau" />
+                    <input required value={newBoatType} onChange={(event) => setNewBoatType(event.target.value)} placeholder="Type" />
+                    <input required type="number" min={1} value={newBoatCapacity} onChange={(event) => setNewBoatCapacity(event.target.value)} placeholder="Capacite" />
+                    <input required value={newBoatCondition} onChange={(event) => setNewBoatCondition(event.target.value)} placeholder="Etat" />
+                    <button className="primary" type="submit">Creer</button>
+                  </form>
+
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Nom</th>
+                          <th>Type</th>
+                          <th>Capacite</th>
+                          <th>Etat</th>
+                          <th>Statut</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {boats.map((boat) => (
+                          <tr key={boat.id}>
+                            <td>{boat.name}</td>
+                            <td>{boat.type}</td>
+                            <td>{boat.capacity}</td>
+                            <td>{boat.condition}</td>
+                            <td>{boat.isOutOfService ? "Hors service" : "Disponible"}</td>
+                            <td>
+                              <button className="chip" type="button" onClick={() => void toggleBoatOutOfService(boat)}>
+                                {boat.isOutOfService ? "Remettre en service" : "Mettre hors service"}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "stats" ? (
+                <>
+                  <h3>Statistiques</h3>
+                  <div className="filters-grid">
+                    <select value={statsPeriod} onChange={(event) => setStatsPeriod(event.target.value)}>
+                      <option value="week">Semaine</option>
+                      <option value="month">Mois</option>
+                      <option value="year">Annee</option>
+                      <option value="all">Tout</option>
+                    </select>
+                  </div>
+
+                  <div className="dashboard-grid">
+                    <article className="metric-card">
+                      <h3>Nombre de sorties</h3>
+                      <p className="metric-value">{overview?.sessionCount ?? 0}</p>
+                    </article>
+                    <article className="metric-card">
+                      <h3>Distance totale</h3>
+                      <p className="metric-value">{overview?.totalDistanceKm.toFixed(1) ?? "0.0"} km</p>
+                    </article>
+                    <article className="metric-card metric-wide">
+                      <h3>Duree totale</h3>
+                      <p className="metric-value">{overview?.totalDurationHours.toFixed(1) ?? "0.0"} h</p>
+                    </article>
+                  </div>
+
+                  <h4>Classement rameurs</h4>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Rameur</th>
+                          <th>Sorties</th>
+                          <th>Distance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rowerStats.map((rower) => (
+                          <tr key={rower.rowerId}>
+                            <td>{rower.rowerName}</td>
+                            <td>{rower.sessionCount}</td>
+                            <td>{rower.totalDistanceKm.toFixed(1)} km</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <h4>Utilisation bateaux</h4>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Bateau</th>
+                          <th>Sorties</th>
+                          <th>Distance</th>
+                          <th>Taux utilisation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {boatStats.map((boat) => (
+                          <tr key={boat.boatId}>
+                            <td>{boat.boatName}</td>
+                            <td>{boat.sessionCount}</td>
+                            <td>{boat.totalDistanceKm.toFixed(1)} km</td>
+                            <td>{boat.usageRatePercent.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+            </section>
+          ) : (
+            <section className="panel panel-warning" aria-label="Acces refuse">
+              <h2>Role insuffisant</h2>
+              <p>
+                Le compte <strong>{user.email}</strong> est connecte en tant que <strong>{user.role}</strong>.
+              </p>
+              <p>Ce role n&apos;a pas acces au dashboard web admin.</p>
+              <button className="primary" type="button" onClick={() => void onLogout()}>
+                Se deconnecter
+              </button>
+            </section>
+          )
         ) : (
           <>
             <div className="switcher" role="tablist" aria-label="Mode authentification">
