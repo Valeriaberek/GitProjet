@@ -10,12 +10,14 @@ type Session = {
   skipperName: string;
   skipperId: string;
   startAtIso: string;
+  endAtIso?: string;
 };
 
 const CURRENT_USER_ID = "m1";
 
-function elapsedLabel(startAtIso: string): string {
-  const minutes = Math.floor((Date.now() - new Date(startAtIso).getTime()) / 60000);
+function elapsedLabel(startAtIso: string, endAtIso?: string): string {
+  const end = endAtIso ? new Date(endAtIso).getTime() : Date.now();
+  const minutes = Math.floor((end - new Date(startAtIso).getTime()) / 60000);
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${h}h${m.toString().padStart(2, "0")}`;
@@ -49,7 +51,7 @@ export default function App() {
   const [newDistance, setNewDistance] = useState("10");
   const [newError, setNewError] = useState("");
 
-  const activeSessions = useMemo(() => sessions, [sessions]);
+  const activeSessions = useMemo(() => sessions.filter((s) => !s.endAtIso), [sessions]);
 
   function onLogin() {
     if (!email.trim() || !password.trim()) {
@@ -66,7 +68,7 @@ export default function App() {
       setNewError("Distance invalide.");
       return;
     }
-    const boatBusy = sessions.some((s) => s.boatName === newBoat);
+    const boatBusy = activeSessions.some((s) => s.boatName === newBoat);
     if (boatBusy) {
       setNewError("Ce bateau est deja en sortie.");
       return;
@@ -83,6 +85,10 @@ export default function App() {
     ]);
     setNewError("");
     setScreen("dashboard");
+  }
+
+  function onCloseSession(id: string) {
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, endAtIso: new Date().toISOString() } : s)));
   }
 
   if (!isAuthenticated) {
@@ -122,8 +128,9 @@ export default function App() {
               <View style={[styles.card, warning && styles.cardWarning]}>
                 <Text style={styles.cardTitle}>{item.boatName}</Text>
                 <Text style={styles.cardText}>Responsable: {item.skipperName}</Text>
-                <Text style={styles.cardText}>Duree: {elapsedLabel(item.startAtIso)}</Text>
+                <Text style={styles.cardText}>Duree: {elapsedLabel(item.startAtIso, item.endAtIso)}</Text>
                 {warning ? <Text style={styles.warningText}>Alerte visuelle: +2h30</Text> : null}
+                {item.skipperId === CURRENT_USER_ID ? <Pressable style={styles.primaryButton} onPress={() => onCloseSession(item.id)}><Text style={styles.primaryButtonText}>Cloturer</Text></Pressable> : null}
               </View>
             );
           }}
