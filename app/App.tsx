@@ -41,6 +41,12 @@ type Session = {
   endAtIso?: string;
 };
 
+type AuthSession = {
+  accessToken: string;
+  refreshToken: string;
+  expiresAtIso: string;
+};
+
 const BOATS: Boat[] = [
   { id: "b1", name: "Yole 4+", capacity: 5 },
   { id: "b2", name: "Skiff", capacity: 1 },
@@ -94,7 +100,7 @@ function isNearAlertThreshold(startIso: string, endIso?: string): boolean {
 }
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [screen, setScreen] = useState<Screen>("dashboard");
 
   const [email, setEmail] = useState("rameur@rowinglogbook.dev");
@@ -144,6 +150,9 @@ export default function App() {
   const [historyFilterBoatId, setHistoryFilterBoatId] = useState("all");
   const [historyFilterDate, setHistoryFilterDate] = useState("");
   const [historyPage, setHistoryPage] = useState(1);
+  const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
+
+  const isAuthenticated = !!authSession;
 
   const activeSessions = useMemo(() => sessions.filter((s) => !s.endAtIso), [sessions]);
   const closedSessions = useMemo(() => sessions.filter((s) => !!s.endAtIso), [sessions]);
@@ -175,6 +184,18 @@ export default function App() {
   const pageSize = 5;
   const historyPageCount = Math.max(1, Math.ceil(historyFiltered.length / pageSize));
   const paginatedHistory = historyFiltered.slice((historyPage - 1) * pageSize, historyPage * pageSize);
+  const detailSession = useMemo(
+    () => sessions.find((session) => session.id === detailSessionId) ?? null,
+    [sessions, detailSessionId]
+  );
+
+  const memberNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    MEMBERS.forEach((member) => {
+      map.set(member.id, member.name);
+    });
+    return map;
+  }, []);
 
   function onLogin() {
     if (!email.trim() || !password.trim()) {
@@ -182,7 +203,11 @@ export default function App() {
       return;
     }
     setAuthError("");
-    setIsAuthenticated(true);
+    setAuthSession({
+      accessToken: `jwt-access-${Date.now()}`,
+      refreshToken: `jwt-refresh-${Date.now()}`,
+      expiresAtIso: new Date(Date.now() + 60 * 60_000).toISOString()
+    });
   }
 
   function onForgotPassword() {
@@ -352,7 +377,7 @@ export default function App() {
         <Pressable
           style={styles.logoutButton}
           onPress={() => {
-            setIsAuthenticated(false);
+            setAuthSession(null);
             setScreen("dashboard");
           }}
         >
@@ -405,6 +430,9 @@ export default function App() {
                 <Text style={styles.cardText}>Depart: {formatDate(item.startAtIso)}</Text>
                 <Text style={styles.cardText}>Duree: {sessionDurationLabel(item.startAtIso)}</Text>
                 {showWarning ? <Text style={styles.warningText}>Alerte visuelle: +2h30</Text> : null}
+                <Pressable style={styles.secondaryButton} onPress={() => setDetailSessionId(item.id)}>
+                  <Text style={styles.secondaryButtonText}>Voir detail</Text>
+                </Pressable>
                 {canClose ? (
                   <Pressable style={styles.secondaryButton} onPress={() => startCloseSession(item)}>
                     <Text style={styles.secondaryButtonText}>Cloturer cette sortie</Text>
@@ -551,6 +579,9 @@ export default function App() {
                   Distance: {item.actualDistanceKm ?? item.plannedDistanceKm} km
                 </Text>
                 <Text style={styles.cardText}>Equipage: {item.crewIds.length + 1} personnes</Text>
+                <Pressable style={styles.secondaryButton} onPress={() => setDetailSessionId(item.id)}>
+                  <Text style={styles.secondaryButtonText}>Voir detail</Text>
+                </Pressable>
               </View>
             )}
             ListEmptyComponent={<Text style={styles.emptyText}>Aucune sortie dans l'historique.</Text>}
@@ -609,6 +640,38 @@ export default function App() {
               </Pressable>
               <Pressable style={styles.primaryButton} onPress={onConfirmCloseSession}>
                 <Text style={styles.primaryButtonText}>Confirmer</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {detailSession ? (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.sectionTitle}>Detail de sortie</Text>
+            <Text style={styles.cardText}>Bateau: {detailSession.boatName}</Text>
+            <Text style={styles.cardText}>Responsable: {detailSession.skipperName}</Text>
+            <Text style={styles.cardText}>Depart: {formatDate(detailSession.startAtIso)}</Text>
+            <Text style={styles.cardText}>
+              Retour: {detailSession.endAtIso ? formatDate(detailSession.endAtIso) : "En cours"}
+            </Text>
+            <Text style={styles.cardText}>
+              Duree: {sessionDurationLabel(detailSession.startAtIso, detailSession.endAtIso)}
+            </Text>
+            <Text style={styles.cardText}>Distance prevue: {detailSession.plannedDistanceKm} km</Text>
+            <Text style={styles.cardText}>
+              Distance reelle: {detailSession.actualDistanceKm ?? "-"}
+            </Text>
+            <Text style={styles.cardText}>Parcours: {detailSession.route ?? "-"}</Text>
+            <Text style={styles.cardText}>
+              Equipage: {detailSession.crewIds.map((id) => memberNameById.get(id) ?? id).join(", ") || "-"}
+            </Text>
+            <Text style={styles.cardText}>Remarques avant: {detailSession.preNotes ?? "-"}</Text>
+            <Text style={styles.cardText}>Remarques apres: {detailSession.postNotes ?? "-"}</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.primaryButton} onPress={() => setDetailSessionId(null)}>
+                <Text style={styles.primaryButtonText}>Fermer</Text>
               </Pressable>
             </View>
           </View>
