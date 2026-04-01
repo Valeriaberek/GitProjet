@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import { Alert, FlatList, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
 
-type Screen = "dashboard";
+type Screen = "dashboard" | "new-session";
 
 type Session = {
   id: string;
@@ -26,9 +26,9 @@ export default function App() {
   const [password, setPassword] = useState("password");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [error, setError] = useState("");
-  const [screen] = useState<Screen>("dashboard");
+  const [screen, setScreen] = useState<Screen>("dashboard");
 
-  const [sessions] = useState<Session[]>([
+  const [sessions, setSessions] = useState<Session[]>([
     {
       id: "s1",
       boatName: "Yole 4+",
@@ -45,6 +45,10 @@ export default function App() {
     }
   ]);
 
+  const [newBoat, setNewBoat] = useState("Yole 4+");
+  const [newDistance, setNewDistance] = useState("10");
+  const [newError, setNewError] = useState("");
+
   const activeSessions = useMemo(() => sessions, [sessions]);
 
   function onLogin() {
@@ -54,6 +58,31 @@ export default function App() {
     }
     setError("");
     setIsAuthenticated(true);
+  }
+
+  function onCreateSession() {
+    const distance = Number(newDistance.replace(",", "."));
+    if (!Number.isFinite(distance) || distance <= 0) {
+      setNewError("Distance invalide.");
+      return;
+    }
+    const boatBusy = sessions.some((s) => s.boatName === newBoat);
+    if (boatBusy) {
+      setNewError("Ce bateau est deja en sortie.");
+      return;
+    }
+    setSessions((prev) => [
+      {
+        id: `s${Date.now()}`,
+        boatName: newBoat,
+        skipperName: "Lina Morel",
+        skipperId: CURRENT_USER_ID,
+        startAtIso: new Date().toISOString()
+      },
+      ...prev
+    ]);
+    setNewError("");
+    setScreen("dashboard");
   }
 
   if (!isAuthenticated) {
@@ -77,7 +106,11 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}><Text style={styles.headerTitle}>Tableau de bord</Text><Pressable style={styles.secondaryButton} onPress={() => setIsAuthenticated(false)}><Text style={styles.secondaryButtonText}>Deconnexion</Text></Pressable></View>
+      <View style={styles.header}><Text style={styles.headerTitle}>Sorties rameur</Text><Pressable style={styles.secondaryButton} onPress={() => setIsAuthenticated(false)}><Text style={styles.secondaryButtonText}>Deconnexion</Text></Pressable></View>
+      <View style={styles.tabBar}>
+        <Pressable style={[styles.tab, screen === "dashboard" && styles.tabActive]} onPress={() => setScreen("dashboard")}><Text style={styles.tabText}>Tableau de bord</Text></Pressable>
+        <Pressable style={[styles.tab, screen === "new-session" && styles.tabActive]} onPress={() => setScreen("new-session")}><Text style={styles.tabText}>Nouvelle sortie</Text></Pressable>
+      </View>
       {screen === "dashboard" ? (
         <FlatList
           data={activeSessions}
@@ -91,12 +124,20 @@ export default function App() {
                 <Text style={styles.cardText}>Responsable: {item.skipperName}</Text>
                 <Text style={styles.cardText}>Duree: {elapsedLabel(item.startAtIso)}</Text>
                 {warning ? <Text style={styles.warningText}>Alerte visuelle: +2h30</Text> : null}
-                {item.skipperId === CURRENT_USER_ID ? <Text style={styles.badgeText}>Vous etes responsable</Text> : null}
               </View>
             );
           }}
         />
-      ) : null}
+      ) : (
+        <View style={styles.formWrap}>
+          <Text style={styles.label}>Bateau</Text>
+          <TextInput style={styles.input} value={newBoat} onChangeText={setNewBoat} />
+          <Text style={styles.label}>Distance prevue (km)</Text>
+          <TextInput style={styles.input} value={newDistance} onChangeText={setNewDistance} keyboardType="decimal-pad" />
+          {newError ? <Text style={styles.errorText}>{newError}</Text> : null}
+          <Pressable style={styles.primaryButton} onPress={onCreateSession}><Text style={styles.primaryButtonText}>Creer la sortie</Text></Pressable>
+        </View>
+      )}
       <StatusBar style="dark" />
     </SafeAreaView>
   );
@@ -109,8 +150,13 @@ const styles = StyleSheet.create({
   subtitle: { color: "#436084", marginBottom: 8 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16 },
   headerTitle: { fontSize: 22, fontWeight: "700", color: "#12233d" },
+  tabBar: { flexDirection: "row", gap: 8, paddingHorizontal: 16 },
+  tab: { flex: 1, borderWidth: 1, borderColor: "#bed1e6", borderRadius: 10, paddingVertical: 8, alignItems: "center", backgroundColor: "#fff" },
+  tabActive: { backgroundColor: "#dcedff", borderColor: "#86aeda" },
+  tabText: { color: "#446487", fontWeight: "600", fontSize: 12 },
   label: { color: "#294665", fontWeight: "600" },
   input: { borderRadius: 10, borderWidth: 1, borderColor: "#bfd1e6", backgroundColor: "#fff", paddingHorizontal: 12, paddingVertical: 10, color: "#1f3550" },
+  formWrap: { padding: 16, gap: 8 },
   primaryButton: { marginTop: 8, borderRadius: 10, paddingVertical: 11, paddingHorizontal: 12, backgroundColor: "#1f6fb2", alignItems: "center" },
   primaryButtonText: { color: "#fff", fontWeight: "700" },
   secondaryButton: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: "#e7f0fa", alignItems: "center" },
@@ -123,6 +169,5 @@ const styles = StyleSheet.create({
   cardWarning: { borderColor: "#e3aa47", backgroundColor: "#fff5e4" },
   cardTitle: { fontSize: 16, fontWeight: "700", color: "#203a58" },
   cardText: { color: "#4c6a8d" },
-  warningText: { color: "#9b5b00", fontWeight: "700" },
-  badgeText: { color: "#1f6fb2", fontWeight: "700" }
+  warningText: { color: "#9b5b00", fontWeight: "700" }
 });
