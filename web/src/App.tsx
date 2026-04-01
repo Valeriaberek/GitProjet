@@ -44,6 +44,11 @@ interface SessionItem {
   route: string | null;
 }
 
+interface SessionDetail extends SessionItem {
+  crew: string[];
+  remarks: string | null;
+}
+
 interface MemberItem {
   id: string;
   firstName: string;
@@ -114,6 +119,8 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sessionsTotal, setSessionsTotal] = useState(0);
+  const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
+  const [isLoadingSessionDetail, setIsLoadingSessionDetail] = useState(false);
   const [members, setMembers] = useState<MemberItem[]>([]);
   const [boats, setBoats] = useState<BoatItem[]>([]);
   const [overview, setOverview] = useState<StatsOverview | null>(null);
@@ -160,6 +167,7 @@ function App() {
       setOverview(null);
       setRowerStats([]);
       setBoatStats([]);
+      setSelectedSession(null);
       return;
     }
 
@@ -181,6 +189,35 @@ function App() {
 
     void loadStats();
   }, [statsPeriod, isAuthenticated, hasAdminAccess]);
+
+  useEffect(() => {
+    if (!hasAdminAccess) {
+      return;
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      if (event.key === "1") {
+        setActiveTab("dashboard");
+      } else if (event.key === "2") {
+        setActiveTab("sessions");
+      } else if (event.key === "3" && isAdmin) {
+        setActiveTab("members");
+      } else if (event.key === "4" && isAdmin) {
+        setActiveTab("boats");
+      } else if (event.key === "5") {
+        setActiveTab("stats");
+      } else if (event.key.toLowerCase() === "r") {
+        void loadDashboardData();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasAdminAccess, isAdmin]);
 
   async function bootstrapSession(): Promise<void> {
     if (token) {
@@ -470,6 +507,24 @@ function App() {
     }
   }
 
+  async function openSessionDetail(sessionId: string): Promise<void> {
+    setIsLoadingSessionDetail(true);
+    try {
+      const detail = await apiFetch<SessionDetail>(`/sessions/${sessionId}`);
+      setSelectedSession(detail);
+    } catch (detailError) {
+      setError(detailError instanceof Error ? detailError.message : "Erreur chargement detail sortie");
+    } finally {
+      setIsLoadingSessionDetail(false);
+    }
+  }
+
+  function formatMinutes(minutes: number): string {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return `${h}h ${m.toString().padStart(2, "0")}m`;
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setError(null);
@@ -564,6 +619,7 @@ function App() {
                   </p>
                 </div>
                 <div className="toolbar-actions">
+                  <span className="live-pill">Live {dashboard ? new Date(dashboard.generatedAt).toLocaleTimeString("fr-FR") : "--:--:--"}</span>
                   <button className="chip" type="button" onClick={() => void loadDashboardData()}>
                     Actualiser
                   </button>
@@ -579,6 +635,13 @@ function App() {
                 {isAdmin ? <button className={activeTab === "members" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("members")} type="button">Membres</button> : null}
                 {isAdmin ? <button className={activeTab === "boats" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("boats")} type="button">Bateaux</button> : null}
                 <button className={activeTab === "stats" ? "chip chip-active" : "chip"} onClick={() => setActiveTab("stats")} type="button">Statistiques</button>
+              </div>
+
+              <div className="quick-actions" role="note" aria-label="Actions rapides">
+                <button className="chip" type="button" onClick={() => setActiveTab("dashboard")}>Vue live</button>
+                <button className="chip" type="button" onClick={() => setActiveTab("sessions")}>Cloturer une sortie</button>
+                <button className="chip" type="button" onClick={() => setActiveTab("stats")}>Voir les stats</button>
+                <p className="shortcut-hint">Raccourcis: 1-5 pour les onglets, R pour actualiser</p>
               </div>
 
               {isLoadingData ? <p className="status">Chargement des donnees...</p> : null}
@@ -618,12 +681,21 @@ function App() {
                       </thead>
                       <tbody>
                         {(dashboard?.activeSessions ?? []).map((session) => (
-                          <tr key={session.id} className={session.isOverThreeHours ? "row-alert" : ""}>
+                          <tr
+                            key={session.id}
+                            className={`${session.isOverThreeHours ? "row-alert" : ""} row-clickable`}
+                            onClick={() => void openSessionDetail(session.id)}
+                          >
                             <td>{session.boatName}</td>
                             <td>{session.responsibleName}</td>
                             <td>{session.crew.join(", ") || "-"}</td>
                             <td>{new Date(session.departureTime).toLocaleString("fr-FR")}</td>
-                            <td>{session.durationMinutes} min</td>
+                            <td>
+                              <span>{formatMinutes(session.durationMinutes)}</span>
+                              <div className="duration-bar" aria-hidden="true">
+                                <span style={{ width: `${Math.min((session.durationMinutes / 180) * 100, 100)}%` }} />
+                              </div>
+                            </td>
                             <td>{session.route || "-"}</td>
                             <td>{session.plannedDistanceKm} km</td>
                           </tr>
@@ -666,7 +738,7 @@ function App() {
                       </thead>
                       <tbody>
                         {sessions.map((session) => (
-                          <tr key={session.id}>
+                          <tr key={session.id} className="row-clickable" onClick={() => void openSessionDetail(session.id)}>
                             <td>{session.boatName}</td>
                             <td>{session.responsibleName}</td>
                             <td>{new Date(session.departureTime).toLocaleString("fr-FR")}</td>
@@ -675,7 +747,14 @@ function App() {
                             <td>{session.actualDistanceKm ?? session.plannedDistanceKm} km</td>
                             <td>
                               {session.status === "IN_PROGRESS" ? (
-                                <button className="chip" type="button" onClick={() => void closeSession(session.id)}>
+                                <button
+                                  className="chip"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void closeSession(session.id);
+                                  }}
+                                >
                                   Cloturer
                                 </button>
                               ) : (
@@ -687,6 +766,24 @@ function App() {
                       </tbody>
                     </table>
                   </div>
+
+                  <section className="detail-drawer" aria-live="polite">
+                    {isLoadingSessionDetail ? <p className="status">Chargement du detail...</p> : null}
+                    {selectedSession ? (
+                      <>
+                        <h4>Detail sortie</h4>
+                        <p>
+                          <strong>{selectedSession.boatName}</strong> - {selectedSession.status}
+                        </p>
+                        <p>Responsable: {selectedSession.responsibleName}</p>
+                        <p>Parcours: {selectedSession.route || "-"}</p>
+                        <p>Equipage: {selectedSession.crew.join(", ") || "-"}</p>
+                        <p>Remarques: {selectedSession.remarks || "-"}</p>
+                      </>
+                    ) : (
+                      <p className="status">Clique une sortie pour voir son detail.</p>
+                    )}
+                  </section>
                 </>
               ) : null}
 
