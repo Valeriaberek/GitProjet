@@ -330,3 +330,39 @@ th {
     justify-content: space-between;
   }
 }
+
+.status {
+  margin: 0.9rem 0 0;
+  color: var(--text-soft);
+}
+
+.status-ok {
+  color: #116149;
+}
+
+.status-error {
+  color: var(--danger);
+}
+
+@keyframes card-enter {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: 1.2rem;
+    border-radius: 14px;
+  }
+
+  .switcher {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
