@@ -4,14 +4,17 @@
     "slug": "rowing-logbook",
     "version": "0.1.0",
     "orientation": "portrait",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.thegeeking.rowinglogbook"
     },
     "web": {
       "bundler": "metro"
