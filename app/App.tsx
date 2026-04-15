@@ -230,42 +230,25 @@ export default function App() {
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <StatusBar style="auto" />
       </View>
-      {screen === "dashboard" ? (
-        <FlatList
-          data={activeSessions}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContainer}
-          renderItem={({ item }) => {
-            const warning = Date.now() - new Date(item.startAtIso).getTime() >= 150 * 60000;
-            return (
-              <View style={[styles.card, warning && styles.cardWarning]}>
-                <Text style={styles.cardTitle}>{item.boatName}</Text>
-                <Text style={styles.cardText}>Responsable: {item.skipperName}</Text>
-                <Text style={styles.cardText}>Duree: {elapsedLabel(item.startAtIso)}</Text>
-                {warning ? <Text style={styles.warningText}>Alerte visuelle: +2h30</Text> : null}
-              </View>
-            );
-          }}
-        />
-      ) : (
-        <View style={styles.formWrap}>
-          <Text style={styles.label}>Bateau</Text>
-          <TextInput style={styles.input} value={newBoat} onChangeText={setNewBoat} />
-          <Text style={styles.label}>Distance prevue (km)</Text>
-          <TextInput style={styles.input} value={newDistance} onChangeText={setNewDistance} keyboardType="decimal-pad" />
-          {newError ? <Text style={styles.errorText}>{newError}</Text> : null}
-          <Pressable style={styles.primaryButton} onPress={onCreateSession}><Text style={styles.primaryButtonText}>Creer la sortie</Text></Pressable>
-        </View>
-      )}
       <StatusBar style="dark" />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#f4f7fb"
+  safeArea: { flex: 1, backgroundColor: "#f4f7fb" },
+  container: { flex: 1, padding: 20, justifyContent: "center", gap: 8 },
+  title: { fontSize: 30, fontWeight: "700", color: "#12233d" },
+  subtitle: { color: "#436084", marginBottom: 8 },
+  label: { color: "#294665", fontWeight: "600" },
+  input: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#bfd1e6",
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: "#1f3550"
   },
   container: {
     flex: 1,
