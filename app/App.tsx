@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "stretch",
     justifyContent: "center",
-    padding: 24
+    flexGrow: 1
   },
   title: {
     fontSize: 28,
@@ -263,7 +263,11 @@ const styles = StyleSheet.create({
     color: "#152238",
     textAlign: "center"
   },
-  subtitle: {
+  cardWarning: {
+    borderColor: "#e3aa47",
+    backgroundColor: "#fff5e4"
+  },
+  cardTitle: {
     fontSize: 16,
     color: "#3a4a66",
     textAlign: "center",
