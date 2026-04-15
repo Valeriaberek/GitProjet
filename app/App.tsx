@@ -1,150 +1,235 @@
-﻿import { StatusBar } from "expo-status-bar";
-import { useMemo, useState } from "react";
-import { Alert, FlatList, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
+import { StatusBar } from "expo-status-bar";
+import { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
+} from "react-native";
 
-type Screen = "dashboard" | "new-session";
+type AuthMode = "login" | "register";
 
-type Session = {
+interface User {
   id: string;
-  boatName: string;
-  skipperName: string;
-  skipperId: string;
-  startAtIso: string;
-  endAtIso?: string;
-};
-
-const CURRENT_USER_ID = "m1";
-
-function elapsedLabel(startAtIso: string, endAtIso?: string): string {
-  const end = endAtIso ? new Date(endAtIso).getTime() : Date.now();
-  const minutes = Math.floor((end - new Date(startAtIso).getTime()) / 60000);
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${h}h${m.toString().padStart(2, "0")}`;
+  email: string;
+  name: string;
+  role: "ROWER" | "STAFF" | "ADMIN";
 }
 
+interface AuthResponse {
+  accessToken: string;
+  refreshToken: string;
+  user: User;
+}
+
+const API_BASE_URL = Platform.OS === "android" ? "http://10.0.2.2:3000" : "http://localhost:3000";
+
 export default function App() {
-  const [email, setEmail] = useState("rameur@rowinglogbook.dev");
-  const [password, setPassword] = useState("password");
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [error, setError] = useState("");
-  const [screen, setScreen] = useState<Screen>("dashboard");
+  const [mode, setMode] = useState<AuthMode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const [sessions, setSessions] = useState<Session[]>([
-    {
-      id: "s1",
-      boatName: "Yole 4+",
-      skipperName: "Lina Morel",
-      skipperId: CURRENT_USER_ID,
-      startAtIso: new Date(Date.now() - 130 * 60000).toISOString()
-    },
-    {
-      id: "s2",
-      boatName: "Huit",
-      skipperName: "Nora Petit",
-      skipperId: "m2",
-      startAtIso: new Date(Date.now() - 170 * 60000).toISOString()
-    }
-  ]);
-
-  const [newBoat, setNewBoat] = useState("Yole 4+");
-  const [newDistance, setNewDistance] = useState("10");
-  const [newError, setNewError] = useState("");
-
-  const activeSessions = useMemo(() => sessions.filter((s) => !s.endAtIso), [sessions]);
-
-  function onLogin() {
-    if (!email.trim() || !password.trim()) {
-      setError("Email et mot de passe sont obligatoires.");
+  useEffect(() => {
+    if (!accessToken || user) {
       return;
     }
-    setError("");
-    setIsAuthenticated(true);
-  }
 
-  function onCreateSession() {
-    const distance = Number(newDistance.replace(",", "."));
-    if (!Number.isFinite(distance) || distance <= 0) {
-      setNewError("Distance invalide.");
-      return;
+    void fetchMe(accessToken);
+  }, [accessToken, user]);
+
+  async function fetchMe(token: string): Promise<void> {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error("Session invalide");
+      }
+
+      const data = (await response.json()) as User;
+      setUser(data);
+    } catch {
+      if (refreshToken) {
+        await refreshSession(refreshToken);
+      } else {
+        clearSession();
+      }
+    } finally {
+      setIsLoading(false);
     }
-    const boatBusy = activeSessions.some((s) => s.boatName === newBoat);
-    if (boatBusy) {
-      setNewError("Ce bateau est deja en sortie.");
-      return;
+  }
+
+  async function refreshSession(token: string): Promise<void> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ refreshToken: token })
+      });
+
+      const data = (await response.json()) as Partial<AuthResponse> & { message?: string | string[] };
+
+      if (!response.ok || !data.accessToken || !data.refreshToken || !data.user) {
+        const message = Array.isArray(data.message) ? data.message[0] : data.message;
+        throw new Error(message ?? "Session expiree");
+      }
+
+      setAccessToken(data.accessToken);
+      setRefreshToken(data.refreshToken);
+      setUser(data.user);
+      setInfo("Session restauree");
+    } catch {
+      clearSession();
+      setError("Reconnecte-toi");
     }
-    setSessions((prev) => [
-      {
-        id: `s${Date.now()}`,
-        boatName: newBoat,
-        skipperName: "Lina Morel",
-        skipperId: CURRENT_USER_ID,
-        startAtIso: new Date().toISOString()
-      },
-      ...prev
-    ]);
-    setNewError("");
-    setScreen("dashboard");
   }
 
-  function onCloseSession(id: string) {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, endAtIso: new Date().toISOString() } : s)));
+  async function submitAuth(): Promise<void> {
+    setError(null);
+    setInfo(null);
+    setIsLoading(true);
+
+    try {
+      const endpoint = mode === "login" ? "login" : "register";
+      const payload = mode === "register" ? { email, password, name } : { email, password };
+
+      const response = await fetch(`${API_BASE_URL}/auth/${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = (await response.json()) as Partial<AuthResponse> & { message?: string | string[] };
+
+      if (!response.ok || !data.accessToken || !data.refreshToken || !data.user) {
+        const message = Array.isArray(data.message) ? data.message[0] : data.message;
+        throw new Error(message ?? "Authentification impossible");
+      }
+
+      setAccessToken(data.accessToken);
+      setRefreshToken(data.refreshToken);
+      setUser(data.user);
+      setPassword("");
+      setInfo(mode === "register" ? "Compte cree" : "Connexion reussie");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Erreur d'authentification");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
-  if (!isAuthenticated) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.container}>
-          <Text style={styles.title}>Rowing Logbook</Text>
-          <Text style={styles.subtitle}>Connexion rameur</Text>
-          <Text style={styles.label}>Email</Text>
-          <TextInput style={styles.input} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-          <Text style={styles.label}>Mot de passe</Text>
-          <TextInput style={styles.input} secureTextEntry value={password} onChangeText={setPassword} />
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          <Pressable style={styles.primaryButton} onPress={onLogin}><Text style={styles.primaryButtonText}>Se connecter</Text></Pressable>
-          <Pressable style={styles.linkButton} onPress={() => Alert.alert("Mot de passe oublie", "Un email de reinitialisation serait envoye.")}><Text style={styles.linkButtonText}>Mot de passe oublie</Text></Pressable>
-        </View>
-        <StatusBar style="dark" />
-      </SafeAreaView>
-    );
+  async function logout(): Promise<void> {
+    if (refreshToken) {
+      await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ refreshToken })
+      });
+    }
+
+    clearSession();
+    setInfo("Session fermee");
+  }
+
+  function clearSession(): void {
+    setAccessToken(null);
+    setRefreshToken(null);
+    setUser(null);
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}><Text style={styles.headerTitle}>Sorties rameur</Text><Pressable style={styles.secondaryButton} onPress={() => setIsAuthenticated(false)}><Text style={styles.secondaryButtonText}>Deconnexion</Text></Pressable></View>
-      <View style={styles.tabBar}>
-        <Pressable style={[styles.tab, screen === "dashboard" && styles.tabActive]} onPress={() => setScreen("dashboard")}><Text style={styles.tabText}>Tableau de bord</Text></Pressable>
-        <Pressable style={[styles.tab, screen === "new-session" && styles.tabActive]} onPress={() => setScreen("new-session")}><Text style={styles.tabText}>Nouvelle sortie</Text></Pressable>
+      <View style={styles.container}>
+        <Text style={styles.title}>Rowing Logbook</Text>
+        <Text style={styles.subtitle}>Authentification mobile</Text>
+
+        {user ? (
+          <View style={styles.panel}>
+            <Text style={styles.label}>Connecte: {user.name}</Text>
+            <Text style={styles.value}>{user.email}</Text>
+            <Text style={styles.value}>Role: {user.role}</Text>
+            <Pressable style={styles.button} onPress={() => void logout()}>
+              <Text style={styles.buttonText}>Se deconnecter</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.panel}>
+            <View style={styles.switchRow}>
+              <Pressable
+                style={mode === "login" ? styles.chipActive : styles.chip}
+                onPress={() => setMode("login")}
+              >
+                <Text style={mode === "login" ? styles.chipTextActive : styles.chipText}>Connexion</Text>
+              </Pressable>
+              <Pressable
+                style={mode === "register" ? styles.chipActive : styles.chip}
+                onPress={() => setMode("register")}
+              >
+                <Text style={mode === "register" ? styles.chipTextActive : styles.chipText}>
+                  Inscription
+                </Text>
+              </Pressable>
+            </View>
+
+            {mode === "register" ? (
+              <TextInput
+                style={styles.input}
+                placeholder="Nom"
+                value={name}
+                onChangeText={setName}
+                autoCapitalize="words"
+              />
+            ) : null}
+
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Mot de passe"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+
+            <Pressable style={styles.button} onPress={() => void submitAuth()}>
+              <Text style={styles.buttonText}>{mode === "login" ? "Se connecter" : "Creer un compte"}</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {isLoading ? <ActivityIndicator style={styles.loader} /> : null}
+        {info ? <Text style={styles.ok}>{info}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <StatusBar style="auto" />
       </View>
-      {screen === "dashboard" ? (
-        <FlatList
-          data={activeSessions}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContainer}
-          renderItem={({ item }) => {
-            const warning = Date.now() - new Date(item.startAtIso).getTime() >= 150 * 60000;
-            return (
-              <View style={[styles.card, warning && styles.cardWarning]}>
-                <Text style={styles.cardTitle}>{item.boatName}</Text>
-                <Text style={styles.cardText}>Responsable: {item.skipperName}</Text>
-                <Text style={styles.cardText}>Duree: {elapsedLabel(item.startAtIso, item.endAtIso)}</Text>
-                {warning ? <Text style={styles.warningText}>Alerte visuelle: +2h30</Text> : null}
-                {item.skipperId === CURRENT_USER_ID ? <Pressable style={styles.primaryButton} onPress={() => onCloseSession(item.id)}><Text style={styles.primaryButtonText}>Cloturer</Text></Pressable> : null}
-              </View>
-            );
-          }}
-        />
-      ) : (
-        <View style={styles.formWrap}>
-          <Text style={styles.label}>Bateau</Text>
-          <TextInput style={styles.input} value={newBoat} onChangeText={setNewBoat} />
-          <Text style={styles.label}>Distance prevue (km)</Text>
-          <TextInput style={styles.input} value={newDistance} onChangeText={setNewDistance} keyboardType="decimal-pad" />
-          {newError ? <Text style={styles.errorText}>{newError}</Text> : null}
-          <Pressable style={styles.primaryButton} onPress={onCreateSession}><Text style={styles.primaryButtonText}>Creer la sortie</Text></Pressable>
-        </View>
-      )}
       <StatusBar style="dark" />
     </SafeAreaView>
   );
@@ -155,26 +240,108 @@ const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, justifyContent: "center", gap: 8 },
   title: { fontSize: 30, fontWeight: "700", color: "#12233d" },
   subtitle: { color: "#436084", marginBottom: 8 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16 },
-  headerTitle: { fontSize: 22, fontWeight: "700", color: "#12233d" },
-  tabBar: { flexDirection: "row", gap: 8, paddingHorizontal: 16 },
-  tab: { flex: 1, borderWidth: 1, borderColor: "#bed1e6", borderRadius: 10, paddingVertical: 8, alignItems: "center", backgroundColor: "#fff" },
-  tabActive: { backgroundColor: "#dcedff", borderColor: "#86aeda" },
-  tabText: { color: "#446487", fontWeight: "600", fontSize: 12 },
   label: { color: "#294665", fontWeight: "600" },
-  input: { borderRadius: 10, borderWidth: 1, borderColor: "#bfd1e6", backgroundColor: "#fff", paddingHorizontal: 12, paddingVertical: 10, color: "#1f3550" },
-  formWrap: { padding: 16, gap: 8 },
-  primaryButton: { marginTop: 8, borderRadius: 10, paddingVertical: 11, paddingHorizontal: 12, backgroundColor: "#1f6fb2", alignItems: "center" },
-  primaryButtonText: { color: "#fff", fontWeight: "700" },
-  secondaryButton: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: "#e7f0fa", alignItems: "center" },
-  secondaryButtonText: { color: "#245179", fontWeight: "700" },
-  linkButton: { alignItems: "center", marginTop: 6 },
-  linkButtonText: { color: "#285f96", textDecorationLine: "underline" },
-  errorText: { color: "#b13030", fontWeight: "600", marginTop: 4 },
-  listContainer: { padding: 16, gap: 12 },
-  card: { borderRadius: 14, padding: 14, backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#d2e2f2", gap: 4 },
-  cardWarning: { borderColor: "#e3aa47", backgroundColor: "#fff5e4" },
-  cardTitle: { fontSize: 16, fontWeight: "700", color: "#203a58" },
-  cardText: { color: "#4c6a8d" },
-  warningText: { color: "#9b5b00", fontWeight: "700" }
+  input: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#bfd1e6",
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: "#1f3550"
+  },
+  container: {
+    flex: 1,
+    alignItems: "stretch",
+    justifyContent: "center",
+    padding: 24
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: "700",
+    marginBottom: 8,
+    color: "#152238",
+    textAlign: "center"
+  },
+  subtitle: {
+    fontSize: 16,
+    color: "#3a4a66",
+    textAlign: "center",
+    marginBottom: 12
+  },
+  panel: {
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#d5dceb",
+    padding: 14,
+    gap: 10
+  },
+  switchRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 4
+  },
+  chip: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#cad6eb",
+    borderRadius: 999,
+    paddingVertical: 8,
+    alignItems: "center"
+  },
+  chipActive: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: 8,
+    alignItems: "center",
+    backgroundColor: "#1b6b53"
+  },
+  chipText: {
+    color: "#2d3953",
+    fontWeight: "600"
+  },
+  chipTextActive: {
+    color: "#ffffff",
+    fontWeight: "700"
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#d0d8e8",
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  button: {
+    backgroundColor: "#0f7f6d",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center"
+  },
+  buttonText: {
+    color: "#fff",
+    fontWeight: "700"
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1d2a3f"
+  },
+  value: {
+    color: "#3c4a60"
+  },
+  loader: {
+    marginTop: 12
+  },
+  ok: {
+    marginTop: 12,
+    color: "#0f684d",
+    textAlign: "center"
+  },
+  error: {
+    marginTop: 12,
+    color: "#ab1f40",
+    textAlign: "center"
+  }
 });
