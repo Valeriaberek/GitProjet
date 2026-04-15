@@ -13,9 +13,5 @@
   "devDependencies": {
     "npm-check-updates": "^19.6.3"
   },
-  "dependencies": {
-    "expo": "~55.0.6",
-    "react": "19.2.0",
-    "react-native": "0.83.2"
-  }
+  "dependencies": {}
 }
